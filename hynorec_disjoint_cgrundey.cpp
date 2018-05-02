@@ -1,7 +1,7 @@
 /**
 * Hybrid NOrec Transactional Memory (Disjoint Memory Access)
 *    Special purpose Hybrid NOrec
-*       This implementation tries to use Intel's HTM
+*       This implementation tries to use Intels HTM
 *       up to 5 times and then uses NOrec as a fallback
 *       with concurrency between the two.
 *
