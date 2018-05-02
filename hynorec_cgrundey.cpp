@@ -13,12 +13,6 @@
 *   add -g option for gdb
 */
 
-/* QUESTION
-  what is counter[] ?
-  threadID not right??
-  HTM doesnt run at all but does in test_threads.cpp ...
-*/
-
 #include <pthread.h>
 #include <cstdlib>
 #include <vector>
@@ -40,12 +34,20 @@
 #define CFENCE  __asm__ volatile ("":::"memory")
 #define MFENCE  __asm__ volatile ("mfence":::"memory")
 
+#define CACHELINE_BYTES 64
+
 #define NUM_ACCTS    1000
 #define NUM_TXN      100000
 #define TRFR_AMT     50
 #define INIT_BALANCE 1000
 
 using namespace std;
+
+struct pad_word_t
+{
+  volatile uintptr_t val;
+  char pad[CACHELINE_BYTES-sizeof(uintptr_t)];
+};
 
 typedef struct {
   int addr;
@@ -57,8 +59,9 @@ int numThreads;
 thread_local list<Acct> read_set;
 thread_local list<Acct> write_set;
 thread_local unsigned int rv = 0;
+thread_local pad_word_t snap_counter[72];
 volatile unsigned int seqlock = 0;
-unsigned int counter[72];
+pad_word_t counter[72];
 
 inline unsigned long long get_real_time() {
     struct timespec time;
@@ -89,6 +92,7 @@ void sw_begin() {
   do {
     rv = seqlock;
   } while (rv & 1);
+  std::copy(std::begin(counter), std::end(counter), std::begin(snap_counter));
 }
 
 void sw_commit() {
@@ -96,6 +100,12 @@ void sw_commit() {
     return;
   while(!__sync_bool_compare_and_swap(&seqlock, rv, rv + 1))
     sw_validate();
+  for (int i = 0; i < 72; i++) {
+    if (snap_counter[i].val != counter[i].val) {
+      sw_validate();
+      break;
+    }
+  }
   /* WRITEBACK */
   list<Acct>::iterator iterator;
   for (iterator = write_set.begin(); iterator != write_set.end(); ++iterator) {
@@ -156,7 +166,6 @@ void* th_run(void * args)
 //________________HW_TRANSACTION___________________________
       unsigned int status = _xbegin();
       if (status == _XBEGIN_STARTED) {
-        printf("test\n");
         if (seqlock & 1) // HW_POST_BEGIN
           _xabort(1);
         for (int j = 0; j < 10; j++) {
@@ -173,7 +182,7 @@ void* th_run(void * args)
           accts[r1].value = a1 - TRFR_AMT;
           accts[r2].value = a2 - TRFR_AMT;
         }
-        counter[tid] += 1;// HW_PRE_COMMIT
+        counter[tid].val += 1;// HW_PRE_COMMIT
         _xend();
         htmCount++;
       } else if (attempts > 0) {
